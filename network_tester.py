@@ -43,6 +43,20 @@ def tcp_connect(host, port):
     except Exception as e:
         return False, None, str(e)
 
+def get_default_gateway():
+    try:
+        import psutil
+        interfaces = psutil.net_if_addrs()
+        for iface, addrs in interfaces.items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip_parts = addr.address.split('.')
+                    if len(ip_parts) == 4:
+                        return f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.1"
+    except:
+        pass
+    return "192.168.50.1"  # fallback
+
 def detect_environment():
     try:
         hostname = socket.getfqdn()
@@ -126,7 +140,8 @@ def run_diagnostics():
         layer_results["1 - Physical"] = False
 
     log("[Layer 2 - Data Link] Pinging local gateway...")
-    success, error = ping_host("192.168.50.1")
+    gateway_ip = get_default_gateway()
+    success, error = ping_host(gateway_ip)
     if success:
         log("✅ OK - Gateway responded")
         layer_results["2 - Data Link"] = True
