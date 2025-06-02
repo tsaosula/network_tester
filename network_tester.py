@@ -1,147 +1,192 @@
+import subprocess
 import socket
 import time
-import subprocess
-import requests
-import psutil
-import netifaces
 from datetime import datetime
-import os
 
-LATENCY_THRESHOLD_MS = 150
+log_entries = []
 
-# Generate unique log file name per run
-timestamp_str = datetime.now().strftime("%Y%m%d_%H%M")
-LOG_FILE = os.path.join(os.path.dirname(__file__), f"network_debug_{timestamp_str}.txt")
+def log(message):
+    timestamp = datetime.now().isoformat(sep=' ', timespec='seconds')
+    entry = f"{timestamp} - {message}"
+    print(entry)
+    log_entries.append(entry)
 
-LAYER_DESCRIPTIONS = {
-    1: "Physical layer: Checks if your network hardware (Wi-Fi or Ethernet) is working. Handled by your device drivers and hardware.",
-    2: "Data Link layer: Ensures your device can communicate with the router/modem over your local network. Handled by your network adapter and OS.",
-    3: "Network layer: Tests if you can reach the wider internet (like Google DNS). Controlled by your router and IP settings.",
-    4: "Transport layer: Tries to start a secure connection to a server. Managed by the OS and firewall.",
-    5: "Session layer: Manages how applications start and maintain connections. Often abstracted by the OS.",
-    6: "Presentation layer: Handles data encryption/decryption (like HTTPS). Managed by the browser or apps.",
-    7: "Application layer: Tests if web services work (DNS and HTTP). Handled by your browser or apps."
-}
-
-def log_line(text):
+def ping_host(host):
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().isoformat()} - {text}\n")
-    except Exception as e:
-        print("⚠️ Failed to write to log file:", e)
-
-def explain_layer(layer_num):
-    if layer_num in LAYER_DESCRIPTIONS:
-        description = f"\n▶ {LAYER_DESCRIPTIONS[layer_num]}"
-        print(description)
-        log_line(description)
-
-def print_status(layer_num, layer_name, test_desc, success, latency=None, error_msg=None, threshold_ms=LATENCY_THRESHOLD_MS):
-    explain_layer(layer_num)
-    if not success:
-        msg = f"[Layer {layer_num} - {layer_name}] ❌ {test_desc} - FAIL ({error_msg})"
-    else:
-        note = ""
-        if latency is not None:
-            note = f" (high latency: {latency:.2f} ms)" if latency >= threshold_ms else f" ({latency:.2f} ms)"
-        msg = f"[Layer {layer_num} - {layer_name}] ✅ OK - {test_desc}{note}"
-    print(msg)
-    log_line(msg)
-
-def get_default_gateway_ip():
-    try:
-        gws = netifaces.gateways()
-        return gws['default'][netifaces.AF_INET][0]
-    except:
-        return None
-
-def check_interface_status():
-    try:
-        interfaces = psutil.net_if_stats()
-        for iface, stats in interfaces.items():
-            if stats.isup:
-                return True, iface
-        return False, "No active interfaces"
+        output = subprocess.run(["ping", "-n", "1", host], capture_output=True, text=True, timeout=5)
+        if output.returncode == 0:
+            return True, None
+        else:
+            return False, output.stderr.strip()
     except Exception as e:
         return False, str(e)
 
-def ping_host(host, count=1):
+def tcp_connect(host, port):
     try:
-        cmd = ['ping', '-n' if socket.getdefaulttimeout() is None else '-c', str(count), host]
         start = time.time()
-        subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-        return (time.time() - start) * 1000, None
-    except subprocess.CalledProcessError as e:
-        return None, str(e)
-
-def measure_dns_resolution(hostname):
-    start = time.time()
-    try:
-        ip = socket.gethostbyname(hostname)
-        return ip, (time.time() - start) * 1000, None
-    except Exception as e:
-        return None, None, str(e)
-
-def measure_tcp_latency(host, port):
-    start = time.time()
-    try:
         with socket.create_connection((host, port), timeout=5):
-            return (time.time() - start) * 1000, None
+            end = time.time()
+            return True, round((end - start) * 1000), None
     except Exception as e:
-        return None, str(e)
+        return False, None, str(e)
 
-def measure_http_latency(url):
-    start = time.time()
+def detect_environment():
     try:
-        response = requests.get(url, timeout=5)
-        return (time.time() - start) * 1000, response.status_code, None
+        hostname = socket.getfqdn()
+        if any(keyword in hostname.lower() for keyword in ["corp", "company", "enterprise"]):
+            return "enterprise"
+
+        import psutil
+        interfaces = psutil.net_if_addrs()
+        vpn_keywords = ["tun", "tap", "pptp", "ppp", "ipsec", "openvpn", "vpn"]
+        for name in interfaces:
+            if any(keyword in name.lower() for keyword in vpn_keywords):
+                return "enterprise"
+
+        gateways = psutil.net_if_stats()
+        for iface, stats in gateways.items():
+            if iface.lower().startswith("eth") or iface.lower().startswith("en"):
+                if stats.isup:
+                    return "home"
+
+        for iface, addrs in interfaces.items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip = addr.address
+                    if ip.startswith("10.") or ip.startswith("172.16.") or ip.startswith("172.31."):
+                        return "enterprise"
+
+        import os
+        user_domain = os.environ.get("USERDOMAIN", "").lower()
+        if user_domain and user_domain not in ["", os.environ.get("COMPUTERNAME", "").lower()]:
+            return "enterprise"
+
+        return "home"
+    except:
+        return "unknown"
+
+def run_diagnostics():
+    issues = []
+    env = detect_environment()
+    log(f"===== NETWORK DEBUG TOOL (CLI Version) =====")
+    log(f"Detected Environment: {env.upper()}")
+
+    log("[Layer 1 - Physical] Checking interface status (assumed OK in CLI)...")
+    try:
+        import psutil
+        stats = psutil.net_if_stats()
+        up = any(info.isup for info in stats.values())
+        if up:
+            log("✅ OK - Network interface is connected")
+        else:
+            log("❌ FAIL - No active network interface found")
+            log("Explanation: Your device has no physical or virtual interface currently connected.")
+            log("Plain Language: Your computer isn’t connected to any network.")
+            log("Responsible: Wi-Fi card, Ethernet port, or OS network driver")
+            issues.append("Layer 1 - Physical")
     except Exception as e:
-        return None, None, str(e)
+        log(f"❌ FAIL - Could not verify interface status: {e}")
+        log("Responsible: Operating system or network stack")
+        issues.append("Layer 1 - Physical")
 
-def main():
-    print("===== NETWORK DEBUG TOOL (Bottom-Up OSI View) =====")
-    log_line("===== New network diagnostic run =====")
+    log("[Layer 2 - Data Link] Pinging local gateway...")
+    success, error = ping_host("192.168.50.1")
+    if success:
+        log("✅ OK - Gateway responded")
+    else:
+        log(f"❌ FAIL - Gateway not reachable: {error}")
+        log("Explanation: Your device couldn't reach the local router, which usually indicates a disconnected Wi-Fi or bad Ethernet cable.")
+        log("Plain Language: Your computer can't talk to your home router.")
+        log("Responsible: Router or access point, Wi-Fi/Ethernet adapter")
+        issues.append("Layer 2 - Data Link")
 
-    target_host = 'example.com'
-    test_url = f"https://{target_host}"
-    public_dns_ip = '8.8.8.8'
-    router_ip = get_default_gateway_ip()
+    log("[Layer 3 - Network] Pinging public IP 8.8.8.8...")
+    success, error = ping_host("8.8.8.8")
+    if success:
+        log("✅ OK - Internet reachable via IP")
+    else:
+        log(f"❌ FAIL - No response from 8.8.8.8: {error}")
+        log("Explanation: Your router couldn't reach the public internet. This is often due to a disconnected modem or ISP outage.")
+        log("Plain Language: Your router may not be connected to the internet.")
+        log("Responsible: Router, modem, or Internet Service Provider")
+        issues.append("Layer 3 - Network")
 
-    if not router_ip:
-        print_status(2, "Data Link", "Could not detect default gateway", False, None, "Unknown gateway IP")
-        return
+    log("[Layer 4 - Transport] TCP connection to example.com:443...")
+    success, latency, error = tcp_connect("example.com", 443)
+    if success:
+        log(f"✅ OK - TCP connected in {latency:.2f} ms")
+    else:
+        log(f"❌ FAIL - TCP connect failed: {error}")
+        log("Explanation: The system tried to reach example.com via TCP but the connection was blocked or timed out.")
+        log("Plain Language: Your computer couldn't open a path to a website.")
+        log("Responsible: Firewall, proxy, or ISP filtering")
+        issues.append("Layer 4 - Transport")
 
-    # Layer 1 - Physical
-    success, iface = check_interface_status()
-    print_status(1, "Physical", "Network interface is up", success, None, iface if not success else None)
+    log("[Layer 5 - Session] Assuming OK if TCP succeeded")
+    if "Layer 4 - Transport" not in issues:
+        log("✅ OK - Session layer assumed healthy")
+    else:
+        log("❌ FAIL - Session layer assumed failed due to TCP issue")
+        log("Responsible: Typically relies on successful transport layer setup. Apps like VPNs, chat clients affected.")
+        issues.append("Layer 5 - Session")
 
-    # Layer 2 - Data Link
-    ping_router_latency, ping_router_error = ping_host(router_ip)
-    print_status(2, "Data Link", f"Ping local gateway {router_ip}", ping_router_latency is not None, ping_router_latency, ping_router_error)
+    log("[Layer 6 - Presentation] TLS/SSL handled by OS/libraries")
+    try:
+        import ssl
+        ssl.create_default_context()
+        log("✅ OK - Presentation layer assumed healthy")
+    except Exception as e:
+        log(f"❌ FAIL - Presentation layer issue: {e}")
+        log("Explanation: TLS/SSL libraries failed to initialize. Secure websites may not work correctly.")
+        log("Plain Language: Your device might have trouble opening secure sites.")
+        log("Responsible: Operating system, SSL libraries, browser settings")
+        issues.append("Layer 6 - Presentation")
 
-    # Layer 3 - Network
-    ping_dns_latency, ping_dns_error = ping_host(public_dns_ip)
-    print_status(3, "Network", f"Ping public IP {public_dns_ip}", ping_dns_latency is not None, ping_dns_latency, ping_dns_error)
+    log("[Layer 7 - Application] Resolving DNS for example.com...")
+    try:
+        ip = socket.gethostbyname("example.com")
+        log(f"✅ OK - DNS resolved to {ip}")
+    except Exception as e:
+        log(f"❌ FAIL - DNS resolution failed: {e}")
+        log("Explanation: DNS queries translate web names to IPs. If this fails, the system can’t find sites by name.")
+        log("Plain Language: Your computer can’t look up websites.")
+        log("Responsible: DNS server, OS configuration, browser DNS settings")
+        issues.append("Layer 7 - Application")
 
-    # Layer 4 - Transport
-    tcp_latency, tcp_error = measure_tcp_latency(target_host, 443)
-    print_status(4, "Transport", f"TCP connect to {target_host}:443", tcp_latency is not None, tcp_latency, tcp_error)
+    log("===== ANALYSIS & SUGGESTIONS =====")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_filename = f"network_diagnostics_log_{timestamp}.txt"
+    if env == "enterprise":
+        log("- You appear to be on a corporate network. Some issues may be caused by VPNs, proxies, or internal firewall policies. Contact IT if needed.")
+    elif env == "home":
+        log("- You appear to be on a home network. Restart your router or check with your ISP if problems persist.")
+    else:
+        log("- Environment unknown. Apply general networking diagnostics.")
+    if not issues:
+        log("✅ All network layers passed. No immediate issues detected.")
+    else:
+        for layer in issues:
+            if layer == "Layer 1 - Physical":
+                log("- Check your physical network adapter, ensure airplane mode is off and cables are connected.")
+            elif layer == "Layer 2 - Data Link":
+                log("- Check your local network connection (Wi-Fi/cable, router power).")
+            elif layer == "Layer 3 - Network":
+                log("- Your network may be blocked from reaching public IPs. Check firewall or routing policies.")
+            elif layer == "Layer 4 - Transport":
+                log("- TCP connections to the internet are failing. Possible proxy or enterprise firewall blocking.")
+            elif layer == "Layer 5 - Session":
+                log("- Session layer issue: This layer manages sessions between applications, and typically depends on successful TCP connections. Check if your organization blocks specific sessions or protocols.")
+            elif layer == "Layer 6 - Presentation":
+                log("- TLS/SSL errors may indicate outdated libraries or incorrect system time.")
+            elif layer == "Layer 7 - Application":
+                log("- DNS resolution failed. Check DNS settings or try another DNS server like 8.8.8.8.")
 
-    # Layer 5 - Session
-    print_status(5, "Session", "Session assumed OK if TCP connection succeeds", tcp_latency is not None)
+    with open(report_filename, "w", encoding="utf-8") as f:
+        f.write("\n".join(log_entries))
+        f.write("\n")
 
-    # Layer 6 - Presentation
-    print_status(6, "Presentation", "TLS/SSL handled by requests/OS — assumed OK", True)
-
-    # Layer 7 - Application (DNS + HTTP)
-    ip, dns_latency, dns_error = measure_dns_resolution(target_host)
-    print_status(7, "Application", f"DNS resolve {target_host}", ip is not None, dns_latency, dns_error)
-
-    http_latency, status_code, http_error = measure_http_latency(test_url)
-    desc = f"HTTP GET {test_url} (status {status_code})" if http_latency else f"HTTP GET {test_url}"
-    print_status(7, "Application", desc, http_latency is not None, http_latency, http_error)
-
-    print(f"\n📝 Log saved to: {LOG_FILE}")
+    log(f"Detailed report saved to: {report_filename}")
 
 if __name__ == "__main__":
-    main()
+    run_diagnostics()
+    input("Press Enter to close the window...")
