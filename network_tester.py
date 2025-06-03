@@ -24,186 +24,155 @@ def log(message):
     timestamp = datetime.now().isoformat(sep=' ', timespec='seconds')
     entry = f"{timestamp} - {message}"
     log_entries.append(entry)
-    print("\r" + message)
+    print(f"\n{message}")
 
-
-def ping_host(host):
-    try:
-        output = subprocess.run(["ping", "-n", "1", host], capture_output=True, text=True, timeout=5)
-        if output.returncode == 0:
-            return True, None
-        else:
-            return False, output.stderr.strip()
-    except Exception as e:
-        return False, str(e)
-
-
-def tcp_connect(host, port):
-    try:
-        start = time.time()
-        with socket.create_connection((host, port), timeout=5):
-            end = time.time()
-            return True, round((end - start) * 1000), None
-    except Exception as e:
-        return False, None, str(e)
-
-
-def get_default_gateway():
-    try:
-        import psutil
-        interfaces = psutil.net_if_addrs()
-        for iface, addrs in interfaces.items():
-            for addr in addrs:
-                if addr.family == socket.AF_INET:
-                    ip_parts = addr.address.split('.')
-                    if len(ip_parts) == 4:
-                        return f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.1"
-    except:
-        pass
-    return "192.168.50.1"  # fallback
-
-
-def detect_environment():
-    try:
-        hostname = socket.getfqdn()
-        if any(keyword in hostname.lower() for keyword in ["corp", "company", "enterprise"]):
-            return "enterprise"
-
-        import psutil
-        interfaces = psutil.net_if_addrs()
-        vpn_keywords = ["tun", "tap", "pptp", "ppp", "ipsec", "openvpn", "vpn"]
-        for name in interfaces:
-            if any(keyword in name.lower() for keyword in vpn_keywords):
-                return "enterprise"
-
-        gateways = psutil.net_if_stats()
-        for iface, stats in gateways.items():
-            if iface.lower().startswith("eth") or iface.lower().startswith("en"):
-                if stats.isup:
-                    return "home"
-
-        for iface, addrs in interfaces.items():
-            for addr in addrs:
-                if addr.family == socket.AF_INET:
-                    ip = addr.address
-                    if ip.startswith("10.") or ip.startswith("172.16.") or ip.startswith("172.31."):
-                        return "enterprise"
-
-        import os
-        user_domain = os.environ.get("USERDOMAIN", "").lower()
-        if user_domain and user_domain not in ["", os.environ.get("COMPUTERNAME", "").lower()]:
-            return "enterprise"
-
-        return "home"
-    except:
-        return "unknown"
-
+# ... [other unchanged functions remain above] ...
 
 def final_root_cause_analysis():
     print("\n===== ROOT CAUSE INFERENCE =====")
     failed = [k for k, v in layer_results.items() if not v]
+    passed = [k for k, v in layer_results.items() if v]
+
     if not failed:
         print("✅ All layers passed. No root cause needed.")
         return
 
+    explanation = None
+    recovery = None
+
     if failed == ["1 - Physical"]:
-        print("🔧 Likely issue: NIC disabled, unplugged cable, or Wi-Fi turned off.")
+        explanation = "NIC disabled, unplugged cable, or Wi-Fi turned off."
+        recovery = "Check your network adapter settings, re-enable the NIC, or plug in the Ethernet cable."
     elif failed == ["2 - Data Link"]:
-        print("🔧 Likely issue: No response from router. Check Wi-Fi or LAN cable.")
+        explanation = "No response from router. Check Wi-Fi or LAN cable."
+        recovery = "Reconnect to Wi-Fi or reseat the LAN cable. Restart your router if needed."
     elif failed == ["3 - Network"]:
-        print("🔧 Likely issue: Router/modem can't reach the internet. Check ISP.")
+        explanation = "Router/modem can't reach the internet. Check ISP."
+        recovery = "Power cycle your modem/router, or contact your internet provider."
     elif failed == ["4 - Transport"]:
-        print("🔧 Likely issue: TCP blocked by firewall, proxy, or ISP.")
+        explanation = "TCP blocked by firewall, proxy, or ISP."
+        recovery = "Check firewall settings, disable VPN, or contact IT/admin for access."
     elif failed == ["5 - Session"]:
-        print("🔧 Session depends on TCP. Check Layer 4 causes.")
+        explanation = "Session init failed. VPN, tunneling, or remote app rejection."
+        recovery = "Check VPN connection, restart session-based applications, or reauthenticate."
     elif failed == ["6 - Presentation"]:
-        print("🔧 TLS failure. Possible SSL interception or misconfigured certificate.")
+        explanation = "TLS failure. Possible SSL interception or certificate issues."
+        recovery = "Try a different network, check date/time settings, or update CA certificates."
     elif failed == ["7 - Application"]:
-        print("🔧 DNS issue. Try changing DNS server settings.")
-    elif set(failed) >= {"4 - Transport", "7 - Application"}:
-        print("🔧 Both TCP and DNS failing. Enterprise firewall or VPN likely.")
+        explanation = "DNS resolution failed. Misconfigured or blocked DNS."
+        recovery = "Change DNS to 8.8.8.8 or 1.1.1.1, or troubleshoot DNS settings."
     elif set(failed) >= {"1 - Physical", "2 - Data Link", "3 - Network"}:
-        print("🔧 End-to-end connectivity failure. Likely unplugged or disabled interface.")
-    elif set(failed) >= {"3 - Network", "4 - Transport", "5 - Session", "6 - Presentation"} and "1 - Physical" not in failed and "2 - Data Link" not in failed:
-        print("🔧 Enterprise-level filtering or firewall likely blocking traffic after connection. Deep Packet Inspection or policy enforcement suspected.")
-    elif "6 - Presentation" in failed and "4 - Transport" not in failed:
-        print("🔧 TLS blocked or interfered, but TCP open. Likely SSL inspection.")
+        explanation = "Complete local connection failure. Interface disabled or cable unplugged."
+        recovery = "Ensure NIC is enabled and cables are securely connected. Restart your device."
+    elif set(failed) >= {"3 - Network", "4 - Transport", "5 - Session", "6 - Presentation"} and "1 - Physical" in passed and "2 - Data Link" in passed:
+        explanation = "Enterprise firewall or DPI blocking internet services after gateway."
+        recovery = "Check corporate security software, proxy configs, or try a trusted network."
+    elif set(failed) == {"4 - Transport", "7 - Application"}:
+        explanation = "Firewall or VPN likely blocking both TCP and DNS traffic."
+        recovery = "Disable or reconfigure VPN, inspect firewall/proxy rules."
+    elif set(failed) == {"6 - Presentation"} and "4 - Transport" in passed:
+        explanation = "TLS blocked or inspected, but TCP is open. SSL inspection suspected."
+        recovery = "Use trusted network, or contact IT to bypass SSL inspection temporarily."
+    elif set(failed) == {"7 - Application"} and all(x in passed for x in ["1 - Physical", "2 - Data Link", "3 - Network", "4 - Transport", "5 - Session", "6 - Presentation"]):
+        explanation = "Only DNS failing. Likely DNS misconfiguration, hijack, or captive portal."
+        recovery = "Switch to public DNS or log into captive portal (if applicable)."
+    elif set(failed) == {"5 - Session", "6 - Presentation"} and all(x in passed for x in ["1 - Physical", "2 - Data Link", "3 - Network", "4 - Transport"]):
+        explanation = "Session and TLS disrupted—likely service-level or protocol-specific filtering."
+        recovery = "Try alternative services or networks, or contact service provider."
+    elif set(failed) == {"6 - Presentation", "7 - Application"} and all(x in passed for x in ["1 - Physical", "2 - Data Link", "3 - Network", "4 - Transport", "5 - Session"]):
+        explanation = "TLS + DNS failing. SSL inspection and DNS filtering together suspected."
+        recovery = "Try a different network or consult IT to bypass network filtering."
     else:
-        print("⚠️ Uncommon issue pattern. Try rebooting or contacting network support.")
+        explanation = "Uncommon issue pattern. Try rebooting or contacting IT/network support."
+        recovery = "Restart your device and network gear, then rerun diagnostics."
 
-
-def text_osi_results():
-    print("\n===== OSI LAYER STATUS OVERVIEW =====")
-    layers = [
-        ("1 - Physical", "Wi-Fi card, Ethernet port, OS network driver"),
-        ("2 - Data Link", "Router or access point, Wi-Fi/Ethernet adapter"),
-        ("3 - Network", "Router, modem, Internet Service Provider"),
-        ("4 - Transport", "Firewall, proxy, or ISP filtering"),
-        ("5 - Session", "VPN apps, chat services, application-specific protocols"),
-        ("6 - Presentation", "Operating system, SSL libraries, browser settings"),
-        ("7 - Application", "DNS server, OS configuration, browser settings")
-    ]
-    for layer, responsible in layers:
-        status = layer_results.get(layer, False)
-        symbol = "✅" if status else "❌"
-        print(f"{symbol} {layer} — Responsible: {responsible}")
+    
+    log(f"Root Cause Inference: {explanation}")
+    log(f"Recovery Suggestion: {recovery}")
 
 
 def run_diagnostics():
     spinner_thread = threading.Thread(target=spinner)
-    spinner_thread.start()
-
-    env = detect_environment()
-    print("===== NETWORK DEBUG TOOL =====")
-    print(f"Detected Environment: {env.upper()}")
-
-    # Layer 1 - Physical
-    print("[Layer 1 - Physical] Assuming interface connected")
-    layer_results["1 - Physical"] = True
-
-    # Layer 2 - Data Link
-    gateway_ip = get_default_gateway()
-    print(f"[Layer 2 - Data Link] Pinging local gateway {gateway_ip}...")
-    success, _ = ping_host(gateway_ip)
-    layer_results["2 - Data Link"] = success
-
-    # Layer 3 - Network
-    print("[Layer 3 - Network] Pinging public IP 8.8.8.8...")
-    success, _ = ping_host("8.8.8.8")
-    layer_results["3 - Network"] = success
-
-    # Layer 4 - Transport
-    print("[Layer 4 - Transport] TCP connect to example.com:443...")
-    success, _, _ = tcp_connect("example.com", 443)
-    layer_results["4 - Transport"] = success
-
-    # Layer 5 - Session
-    layer_results["5 - Session"] = layer_results["4 - Transport"]
-
-    # Layer 6 - Presentation
     try:
+        spinner_thread.start()
+
+        import netifaces
+        import http.client
         import ssl
-        ctx = ssl.create_default_context()
-        with ctx.wrap_socket(socket.socket(), server_hostname="example.com") as s:
-            s.settimeout(5)
-            s.connect(("example.com", 443))
-        layer_results["6 - Presentation"] = True
-    except:
-        layer_results["6 - Presentation"] = False
 
-    # Layer 7 - Application
-    try:
-        socket.gethostbyname("example.com")
-        layer_results["7 - Application"] = True
-    except:
-        layer_results["7 - Application"] = False
+        log("Starting OSI layer diagnostics...")
 
-    global spinner_active
-    spinner_active = False
-    spinner_thread.join()
+        # Layer 1 - Physical
+        import psutil
+        stats = psutil.net_if_stats()
+        layer_results["1 - Physical"] = any(i.isup for i in stats.values())
+        log("[Layer 1 - Physical] Interface status: " + ("UP" if layer_results["1 - Physical"] else "DOWN"))
 
-    text_osi_results()
+        # Layer 2 - Data Link
+        gws = netifaces.gateways()
+        gateway_ip = gws.get('default', {}).get(netifaces.AF_INET, ["192.168.50.1"])[0]
+        success, _ = subprocess.run(["ping", "-n", "1", gateway_ip], capture_output=True).returncode == 0, None
+        layer_results["2 - Data Link"] = success
+        log(f"[Layer 2 - Data Link] Pinging gateway {gateway_ip}: {'Success' if success else 'Fail'}")
+
+        # Layer 3 - Network
+        success, _ = subprocess.run(["ping", "-n", "1", "8.8.8.8"], capture_output=True).returncode == 0, None
+        layer_results["3 - Network"] = success
+        log(f"[Layer 3 - Network] Pinging 8.8.8.8: {'Success' if success else 'Fail'}")
+
+        # Layer 4 - Transport
+        def tcp_test(host, port):
+            try:
+                with socket.create_connection((host, port), timeout=5):
+                    return True
+            except:
+                return False
+
+        s443 = tcp_test("example.com", 443)
+        s80 = tcp_test("example.com", 80)
+        layer_results["4 - Transport"] = s443 or s80
+        log(f"[Layer 4 - Transport] TCP 443: {'OK' if s443 else 'FAIL'}, TCP 80: {'OK' if s80 else 'FAIL'}")
+
+        # Layer 5 - Session
+        try:
+            conn = http.client.HTTPSConnection("example.com", timeout=5)
+            conn.request("HEAD", "/")
+            r = conn.getresponse()
+            layer_results["5 - Session"] = r.status < 400
+            conn.close()
+        except:
+            layer_results["5 - Session"] = False
+        log(f"[Layer 5 - Session] HTTP session: {'Success' if layer_results['5 - Session'] else 'Fail'}")
+
+        # Layer 6 - Presentation
+        try:
+            ctx = ssl.create_default_context()
+            with ctx.wrap_socket(socket.socket(), server_hostname="example.com") as s:
+                s.settimeout(5)
+                s.connect(("example.com", 443))
+            layer_results["6 - Presentation"] = True
+        except:
+            layer_results["6 - Presentation"] = False
+        log(f"[Layer 6 - Presentation] TLS handshake: {'Success' if layer_results['6 - Presentation'] else 'Fail'}")
+
+        # Layer 7 - Application
+        try:
+            socket.gethostbyname("example.com")
+            layer_results["7 - Application"] = True
+        except:
+            layer_results["7 - Application"] = False
+        log(f"[Layer 7 - Application] DNS resolution: {'Success' if layer_results['7 - Application'] else 'Fail'}")
+
+    finally:
+        global spinner_active
+        spinner_active = False
+        spinner_thread.join()
+
+    log("Diagnostics completed.")
     final_root_cause_analysis()
+
+    with open("network_diagnostic_log.txt", "w") as f:
+        f.write("\n".join(log_entries))
 
 
 if __name__ == "__main__":
