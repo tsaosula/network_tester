@@ -26,6 +26,15 @@ def log(message):
     log_entries.append(entry)
     print(f"\n{message}")
 
+
+def tcp_test(host, port):
+    """Attempt to establish a TCP connection to the specified host and port."""
+    try:
+        with socket.create_connection((host, port), timeout=5):
+            return True
+    except Exception:
+        return False
+
 # ... [other unchanged functions remain above] ...
 
 def final_root_cause_analysis():

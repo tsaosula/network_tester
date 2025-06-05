@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 import socket
 import network_tester  # Adjust this if your module name differs
 
@@ -76,6 +76,23 @@ class TestNetworkDiagnostics(unittest.TestCase):
         ip = socket.gethostbyname("example.com")
         test_results.append("Layer 7 - DNS Resolution")
         self.assertEqual(ip, "93.184.216.34")
+
+    @patch("network_tester.log")
+    def test_final_root_cause_analysis(self, mock_log):
+        network_tester.layer_results = {
+            "1 - Physical": True,
+            "2 - Data Link": True,
+            "3 - Network": False,
+            "4 - Transport": True,
+            "5 - Session": True,
+            "6 - Presentation": True,
+            "7 - Application": True,
+        }
+        network_tester.final_root_cause_analysis()
+        messages = [call.args[0] for call in mock_log.call_args_list]
+        test_results.append("Final Root Cause Analysis")
+        self.assertTrue(any("Root Cause Inference" in m for m in messages))
+        self.assertTrue(any("Recovery Suggestion" in m for m in messages))
 
 if __name__ == '__main__':
     result = unittest.main(exit=False)
