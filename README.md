@@ -13,3 +13,9 @@ This is a layer-by-layer Windows network diagnostic tool based on the OSI model.
 
 ```bash
 pip install -r requirements.txt
+python network_tester.py
+```
+
+## Usage
+
+Run the script and follow the on-screen prompts. A timestamped log is saved to `network_diagnostic_log.txt` for later review.
