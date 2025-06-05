@@ -1,9 +1,10 @@
 import unittest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 import socket
 import network_tester  # Adjust this if your module name differs
 
 test_results = []
+
 
 class TestNetworkDiagnostics(unittest.TestCase):
 
@@ -20,7 +21,10 @@ class TestNetworkDiagnostics(unittest.TestCase):
         test_results.append("Layer 4 - TCP Timeout")
         self.assertFalse(result)
 
-    @patch("socket.create_connection", side_effect=OSError("Network unreachable"))
+    @patch(
+        "socket.create_connection",
+        side_effect=OSError("Network unreachable"),
+    )
     def test_layer4_tcp_oserror(self, mock_connect):
         result = network_tester.tcp_test("example.com", 443)
         test_results.append("Layer 4 - TCP OSError")
@@ -36,14 +40,18 @@ class TestNetworkDiagnostics(unittest.TestCase):
     def test_layer2_datalink(self, mock_run):
         mock_run.return_value.returncode = 0
         test_results.append("Layer 2 - Data Link Ping Gateway")
-        result = mock_run(["ping", "-n", "1", "192.168.1.1"], capture_output=True)
+        result = mock_run(
+            ["ping", "-n", "1", "192.168.1.1"], capture_output=True
+        )
         self.assertEqual(result.returncode, 0)
 
     @patch("subprocess.run")
     def test_layer3_network(self, mock_run):
         mock_run.return_value.returncode = 0
         test_results.append("Layer 3 - Network Ping Public IP")
-        result = mock_run(["ping", "-n", "1", "8.8.8.8"], capture_output=True)
+        result = mock_run(
+            ["ping", "-n", "1", "8.8.8.8"], capture_output=True
+        )
         self.assertEqual(result.returncode, 0)
 
     @patch("http.client.HTTPSConnection")
@@ -62,10 +70,14 @@ class TestNetworkDiagnostics(unittest.TestCase):
         mock_socket = MagicMock()
         mock_socket.connect.return_value = True
         mock_context = MagicMock()
-        mock_context.wrap_socket.return_value.__enter__.return_value = mock_socket
+        mock_context.wrap_socket.return_value.__enter__.return_value = (
+            mock_socket
+        )
         mock_ssl.return_value = mock_context
         test_results.append("Layer 6 - TLS Handshake")
-        s = mock_context.wrap_socket(socket.socket(), server_hostname="example.com")
+        s = mock_context.wrap_socket(
+            socket.socket(), server_hostname="example.com"
+        )
         s.settimeout(5)
         s.connect(("example.com", 443))
         self.assertTrue(True)
@@ -89,10 +101,11 @@ class TestNetworkDiagnostics(unittest.TestCase):
             "7 - Application": True,
         }
         network_tester.final_root_cause_analysis()
-        messages = [call.args[0] for call in mock_log.call_args_list]
+        messages = [entry.args[0] for entry in mock_log.call_args_list]
         test_results.append("Final Root Cause Analysis")
         self.assertTrue(any("Root Cause Inference" in m for m in messages))
         self.assertTrue(any("Recovery Suggestion" in m for m in messages))
+
 
 if __name__ == '__main__':
     result = unittest.main(exit=False)
