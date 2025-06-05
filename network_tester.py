@@ -26,6 +26,15 @@ def log(message):
     log_entries.append(entry)
     print(f"\n{message}")
 
+
+def tcp_test(host, port):
+    """Attempt a TCP connection to the given host and port."""
+    try:
+        with socket.create_connection((host, port), timeout=5):
+            return True
+    except Exception:
+        return False
+
 # ... [other unchanged functions remain above] ...
 
 def final_root_cause_analysis():
@@ -121,13 +130,6 @@ def run_diagnostics():
         log(f"[Layer 3 - Network] Pinging 8.8.8.8: {'Success' if success else 'Fail'}")
 
         # Layer 4 - Transport
-        def tcp_test(host, port):
-            try:
-                with socket.create_connection((host, port), timeout=5):
-                    return True
-            except:
-                return False
-
         s443 = tcp_test("example.com", 443)
         s80 = tcp_test("example.com", 80)
         layer_results["4 - Transport"] = s443 or s80
